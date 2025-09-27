@@ -1,6 +1,7 @@
 name: macOS tests
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - maintenance/**

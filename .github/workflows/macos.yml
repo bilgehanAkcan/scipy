@@ -22,15 +22,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  get_commit_message:
-    name: Get commit message
-    uses: ./.github/workflows/commit_message.yml
-
   test_meson:
     name: Conda & umfpack/scikit-sparse, fast, py3.11/npAny, spin
-    needs: get_commit_message
-    if: >
-      needs.get_commit_message.outputs.message == 1
     runs-on: macos-latest
     strategy:
       matrix:
@@ -126,12 +119,24 @@ jobs:
 
         CC="ccache $CC" spin build --use-system-libraries
 
-    - name: Test SciPy
+    - name: Build and Install pytest-testmon
+      run: |
+        pip install pytest-testmon
+
+    - name: Cache testmon data
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+      with:
+        path: .testmondata
+        key: testmon-${{ github.workflow }}-${{ github.sha }}
+        restore-keys: |
+          testmon-${{ github.workflow }}-
+
+    - name: Test SciPy (with testmon)
       shell: bash -l {0}
       run: |
         conda activate scipy-dev
-        export OMP_NUM_THREADS=2
-        spin test -j2
+        pytest --testmon
+
 
     - name: Ccache statistics
       shell: bash -l {0}
@@ -141,9 +146,6 @@ jobs:
 
   test_scipy_openblas:
     name: M1 & OpenBLAS, fast, py3.11/npAny, spin
-    needs: get_commit_message
-    if: >
-      needs.get_commit_message.outputs.message == 1
     runs-on: macos-14
     strategy:
       matrix:
@@ -177,14 +179,11 @@ jobs:
         spin build --with-scipy-openblas
 
         pip install pooch pytest hypothesis
-        spin test
+        pytest --testmon
 
 
   test_accelerate:
     name: Accelerate, full, py3.13/npAny, spin
-    needs: get_commit_message
-    if: >
-      needs.get_commit_message.outputs.message == 1
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -228,4 +227,4 @@ jobs:
 
     - name: Run the test suite
       run: |
-        spin test -m full
+        pytest --testmon

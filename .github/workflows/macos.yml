@@ -105,10 +105,8 @@ jobs:
         CC="ccache $CC" spin build --use-system-libraries
 
     - name: Install SciPy into Python
-      shell: bash -l {0}
       run: |
-        conda activate scipy-dev
-        pip install ./build-install
+        spin install
 
     - name: Build and Install pytest-testmon
       run: |
@@ -169,7 +167,8 @@ jobs:
 
     - name: Install SciPy into Python
       run: |
-        pip install ./build-install
+        spin install
+
 
     - name: Run tests
       run: |
@@ -217,7 +216,7 @@ jobs:
 
     - name: Install SciPy into Python
       run: |
-        pip install ./build-install
+        spin install
 
     - name: Run the test suite
       run: |

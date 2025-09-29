@@ -22,8 +22,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  get_commit_message:
+    name: Get commit message
+    uses: ./.github/workflows/commit_message.yml
+
   test_meson:
     name: Conda & umfpack/scikit-sparse, fast, py3.11/npAny, spin
+    needs: get_commit_message
+    if: >
+      needs.get_commit_message.outputs.message == 1
     runs-on: macos-latest
     strategy:
       matrix:
@@ -50,9 +57,18 @@ jobs:
     - name: Setup compiler cache
       uses:  actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       id:    cache-ccache
+      # Reference: https://docs.github.com/en/actions/guides/caching-dependencies-to-speed-up-workflows#matching-a-cache-key
+      # NOTE: The caching strategy is modeled in a way that it will always have
+      # a unique cache key for each workflow run (even if the same workflow is
+      # run multiple times). The restore keys are not unique and for a partial
+      # match, they will return the most recently created cache entry,
+      # according to the GitHub Action Docs.
       with:
         path: ${{ steps.prep-ccache.outputs.dir }}
         key:  ${{ github.workflow }}-${{ matrix.python-version }}-ccache-macos-${{ steps.prep-ccache.outputs.timestamp }}
+        # This evaluates to `macOS Tests-3.11-ccache-macos-` which is not
+        # unique. As the CI matrix is expanded, this will need to be updated to
+        # be unique so that the cache is not restored from a different job altogether.
         restore-keys: |
           ${{ github.workflow }}-${{ matrix.python-version }}-ccache-macos-
 
@@ -76,6 +92,7 @@ jobs:
     - name: Cache conda
       uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
       env:
+        # Increase this value to reset cache if environment.yml has not changed
         CACHE_NUMBER: 1
       with:
         path: ${{ env.CONDA }}/envs/scipy-dev
@@ -87,44 +104,34 @@ jobs:
       run: mamba env update -n scipy-dev -f environment.yml
       if: steps.envcache.outputs.cache-hit != 'true'
 
-    - name: Build SciPy
+    - name: Build and Install SciPy
       shell: bash -l {0}
       run: |
         conda activate scipy-dev
         mamba install python=${{ matrix.python-version}}
 
+        # optional test dependencies
+        # scikit-umfpack is pinned because 0.4.2 packages seem broken, see gh-23564
         mamba install "scikit-umfpack=0.3.3" scikit-sparse
+
+        # configure system boost
         mamba install libboost-headers=1.89.0
         export BOOST_INCLUDEDIR=${{ env.CONDA }}/envs/scipy-dev/include/boost
         export BOOST_LIBRARYDIR=${{ env.CONDA }}/envs/scipy-dev/lib
-        rm -rf subprojects/boost_math
+        rm -rf subprojects/boost_math  # so will fail if system boost doesn't work
 
+        # configure system qhull
         mamba install qhull=2020.2
-        rm -rf subprojects/qhull_r
+        rm -rf subprojects/qhull_r  # so will fail if system qhull doesn't work
 
         CC="ccache $CC" spin build --use-system-libraries
 
-    - name: Install SciPy into Python
-      run: |
-        spin install
-
-    - name: Build and Install pytest-testmon
-      run: |
-        pip install pytest-testmon
-
-    - name: Cache testmon data
-      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
-      with:
-        path: .testmondata
-        key: testmon-${{ github.workflow }}-${{ github.sha }}
-        restore-keys: |
-          testmon-${{ github.workflow }}-
-
-    - name: Test SciPy (with testmon)
+    - name: Test SciPy
       shell: bash -l {0}
       run: |
         conda activate scipy-dev
-        pytest --testmon
+        export OMP_NUM_THREADS=2
+        spin test -j2
 
     - name: Ccache statistics
       shell: bash -l {0}
@@ -134,6 +141,9 @@ jobs:
 
   test_scipy_openblas:
     name: M1 & OpenBLAS, fast, py3.11/npAny, spin
+    needs: get_commit_message
+    if: >
+      needs.get_commit_message.outputs.message == 1
     runs-on: macos-14
     strategy:
       matrix:
@@ -149,7 +159,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
 
-    - name: Build SciPy with OpenBLAS
+    - name: Build and Install SciPy
       run: |
         sudo xcode-select -s /Applications/Xcode_15.2.app
 
@@ -158,6 +168,7 @@ jobs:
         ln -s $GFORTRAN_LOC gfortran
         export PATH=$PWD:$PATH
 
+        # Ensure we have gfortran dylib
         GFORTRAN_LIB=$(dirname `gfortran --print-file-name libgfortran.dylib`)
         export DYLD_LIBRARY_PATH=$GFORTRAN_LIB
 
@@ -165,19 +176,15 @@ jobs:
         pip install -r requirements/openblas.txt
         spin build --with-scipy-openblas
 
-    - name: Install SciPy into Python
-      run: |
-        spin install
-
-
-    - name: Run tests
-      run: |
-        pip install pooch pytest hypothesis pytest-testmon
-        pytest --testmon
+        pip install pooch pytest hypothesis
+        spin test
 
 
   test_accelerate:
     name: Accelerate, full, py3.13/npAny, spin
+    needs: get_commit_message
+    if: >
+      needs.get_commit_message.outputs.message == 1
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -193,8 +200,9 @@ jobs:
       with:
         python-version: "3.13"
 
-    - name: Make gfortran-13 usable
+    - name: Make gfortran-13 on runner image usable
       run: |
+        # Ensure we use gfortran-13 and that its runtime is on the library search path
         FC=$(which gfortran-13)
         GFORTRAN_LIB=$(dirname `$FC --print-file-name libgfortran.dylib`)
         echo DYLD_LIBRARY_PATH=$GFORTRAN_LIB >> "$GITHUB_ENV"
@@ -202,22 +210,22 @@ jobs:
 
     - name: Install dependencies from PyPI
       run: |
-        pip install meson cython pythran pybind11 ninja numpy spin pooch pytest hypothesis pytest-testmon "click<8.3.0"
+        pip install meson cython pythran pybind11 ninja numpy spin pooch pytest hypothesis "click<8.3.0"
 
     - name: Build SciPy with Accelerate (LP64)
       if: matrix.blas-interface == 'LP64'
       run: |
+        # The b_ndebug flag is a workaround for `_LIBCPP_ENABLE_ASSERTIONS` warnings, can
+        # be removed once Meson 1.8.3 is out with the fix (see meson#14440).
         spin build --with-accelerate -S-Db_ndebug=true
 
     - name: Build SciPy with Accelerate (ILP64)
       if: matrix.blas-interface == 'ILP64'
       run: |
+        # Once Meson has full BLAS support (xref meson#14773), the
+        # `blas-symbol-suffix` flag can be dropped.
         spin build -S-Dblas=accelerate -S-Duse-ilp64=true -S-Dblas-symbol-suffix='$NEWLAPACK$ILP64' -S-Db_ndebug=true
-
-    - name: Install SciPy into Python
-      run: |
-        spin install
 
     - name: Run the test suite
       run: |
-        pytest --testmon
+        spin test -m full

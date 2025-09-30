@@ -236,4 +236,4 @@ jobs:
 
     - name: Run the test suite with testmon
       run: |
-        spin test -- -m full --testmon -n 2
+        spin test -- --testmon -n 2
